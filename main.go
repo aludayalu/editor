@@ -11,8 +11,11 @@ func main() {
 
 	for event := range events {
 		fmt.Println(event)
-		if event.Type == ENUM_EVENT_KEY && event.KeyData.Key == "CTRL+C" {
-			return
+		if event.Type == ENUM_EVENT_KEY {
+			if event.KeyData.Key == "CTRL+C" {
+				return
+			}
+			fmt.Println(event.KeyData.Key)
 		}
 	}
 }
