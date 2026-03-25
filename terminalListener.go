@@ -143,20 +143,21 @@ func terminalListener(events chan<- Event) {
 							prefix := ""
 
 							if mod >= 2 {
-								if mod == 2 {
-									prefix = "SHIFT+"
-								} else if mod == 3 {
-									prefix = "ALT+"
-								} else if mod == 4 {
-									prefix = "ALT+SHIFT+"
-								} else if mod == 5 {
-									prefix = "CTRL+"
-								} else if mod == 6 {
-									prefix = "CTRL+SHIFT+"
-								} else if mod == 7 {
-									prefix = "CTRL+ALT+"
-								} else if mod == 8 {
-									prefix = "CTRL+ALT+SHIFT+"
+								switch mod {
+									case 2:
+										prefix = "SHIFT+"
+									case 3:
+										prefix = "ALT+"
+									case 4:
+										prefix = "ALT+SHIFT+"
+									case 5:
+										prefix = "CTRL+"
+									case 6:
+										prefix = "CTRL+SHIFT+"
+									case 7:
+										prefix = "CTRL+ALT+"
+									case 8:
+										prefix = "CTRL+ALT+SHIFT+"
 								}
 							}
 
