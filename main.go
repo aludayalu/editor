@@ -27,7 +27,7 @@ func main() {
 func KeyboardDebugging(events <-chan Event) {
 	for event := range events {
 		if event.Type == ENUM_EVENT_KEY {
-			fmt.Println(event.KeyData.Key, event.KeyData.Data)
+			fmt.Println("\r", event.KeyData.Key, event.KeyData.Data)
 			if event.KeyData.Key == "CTRL+C"  {
 				return
 			}

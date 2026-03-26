@@ -426,7 +426,7 @@ func terminalListener(events chan<- Event, listener_cleanup *func()) {
 				if bytes.HasPrefix(pending[i:], pasteEnd) {
 					inPaste = false
 					pasted := string(pasteBuffer)
-					events <- Event{Type: ENUM_EVENT_KEY, KeyData: &KeyEventData{Key: "CTRL+V", Data: &pasted}}
+					events <- Event{Type: ENUM_EVENT_KEY, KeyData: &KeyEventData{Key: "PASTE", Data: &pasted}}
 					i += len(pasteEnd)
 					continue
 				}
