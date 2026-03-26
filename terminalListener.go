@@ -10,6 +10,9 @@ import (
 // written originally by ChatGPT
 func terminalListener(events chan<- Event) {
 	fd := int(os.Stdin.Fd())
+	
+	defer os.Stdout.Sync()
+
 	oldState, _ := term.MakeRaw(fd)
 	defer term.Restore(fd, oldState)
 
