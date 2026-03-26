@@ -13,10 +13,19 @@ func terminalListener(events chan<- Event) {
 	oldState, _ := term.MakeRaw(fd)
 	defer term.Restore(fd, oldState)
 
-	os.Stdout.Write([]byte("\x1b[?1003h\x1b[?1006h"))
-	os.Stdout.Write([]byte("\x1b[?25l"))
-	defer os.Stdout.Write([]byte("\x1b[?1003l\x1b[?1006l"))
+	os.Stdout.Write([]byte("\x1b[?1049h")) // alternate screen buffer
+	defer os.Stdout.Write([]byte("\x1b[?1049l"))
+
+	os.Stdout.Write([]byte("\x1b[?25l")) // hides cursor
 	defer os.Stdout.Write([]byte("\x1b[?25h"))
+
+	os.Stdout.Write([]byte("\x1b[?2004h")) // enable bracketed paste
+	defer os.Stdout.Write([]byte("\x1b[?2004l"))
+
+	defer os.Stdout.Write([]byte("\x1b[0m")) // reset terminal styles
+
+	os.Stdout.Write([]byte("\x1b[?1003h\x1b[?1006h"))
+	defer os.Stdout.Write([]byte("\x1b[?1003l\x1b[?1006l"))
 
 	buf := make([]byte, 128)
 	pending := make([]byte, 0, 256)
