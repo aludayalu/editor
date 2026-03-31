@@ -26,11 +26,14 @@ func main() {
 
 func KeyboardDebugging(events <-chan Event) {
 	for event := range events {
+		if event.Type == ENUM_EVENT_MOUSE {
+			fmt.Println(event.MouseData)
+		}
 		if event.Type == ENUM_EVENT_KEY {
-			fmt.Println("\r", event.KeyData.Key, event.KeyData.Data)
-			if event.KeyData.Key == "CTRL+C"  {
-				return
-			}
+			fmt.Println(event.KeyData)
+		}
+		if event.Type == ENUM_EVENT_RESIZE {
+			fmt.Println(event.ResideData)
 		}
 	}
 }
