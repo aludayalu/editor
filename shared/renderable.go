@@ -1,9 +1,13 @@
 package shared
 
 type RenderResult struct {
-	Height int
-	Width int
-	Data string
+	Start Coordinate
+	End Coordinate
+}
+
+type Coordinate struct {
+	Column int
+	Row int
 }
 
 type Renderable interface {
@@ -12,10 +16,15 @@ type Renderable interface {
 
 
 type Render_Info struct {
-	SuggestedDimensions SuggestedDimensions
+	Buffer *[][]Cell // [row][column][index]
+	Dimensions RenderingDimensions
 }
 
-type SuggestedDimensions struct {
-	Height int
-	Width int
+type RenderingDimensions struct {
+	SuggestedHeight int
+	SuggestedWidth int
+}
+
+type Cell struct {
+	Data string
 }
