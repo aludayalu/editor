@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"ltz/engine"
-	"ltz/keys"
 	"ltz/shared"
 	"os"
 
@@ -14,7 +13,7 @@ import (
 func main() {
 	var events chan shared.Event = make(chan shared.Event)
 
-	debugMode := flag.Bool("debug", false, "To enable keyboard debugging information")
+	debugMode := flag.Bool("key-debug", false, "To enable basic keyboard debugging by printing events")
 	toProbe := flag.Bool("grapheme", false, "Test your terminal's grapheme rendering quirks and save it to ensure unicode graphemes are more correctly rendered.\nRun this test whenever your terminal is glitchy.")
 	
 	flag.Parse()
@@ -37,20 +36,19 @@ func main() {
 
 	{ // Initializing Configuration
 		shared.LoadGraphemeConfig()
-		keys.InitializeKeys()
 	}
 
 	listener_cleanup := func(){}
-	hasStarted := make(chan int)
 
+	hasStarted := make(chan int)
 	go terminalListener(events, &listener_cleanup, hasStarted)
+	<-hasStarted
 
 	go resizeListener(events)
 
 	if *debugMode {
 		KeyboardDebugging(events)
 	} else {
-		<-hasStarted
 		engine.Run(events)
 	}
 
