@@ -15,7 +15,7 @@ type Event struct {
 }
 
 type MouseEventData struct {
-	Button int
+	Modifier string
 	X int
 	Y int
 	Pressed int
