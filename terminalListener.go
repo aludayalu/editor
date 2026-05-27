@@ -1,10 +1,10 @@
 package main
 
 import (
-	"fmt"
+	"errors"
+
 	"ltz/shared"
 	"os"
-	"strconv"
 	"sync"
 	"time"
 
@@ -31,196 +31,473 @@ func terminalListener(events chan<- shared.Event, listener_cleanup *func(), hasS
 	}
 
 	*listener_cleanup = cleanup
-	hasStarted <- 1
-	readBuf := make([]byte, 1024) // TODO: set this to 1024
-
-	loopMode := 0 // 0:Normal 1:N Bytes 2:Bytes until pattern
-	bytes_left_to_read := 0
-	n_bytes_buffer := make([]byte, 0, 1024)
-
-	var escapeTimeoutStartTime time.Time
-	var escapeTimeoutMutex sync.Mutex
-
-	state := 0 // 0:None 1:ESC+X 2:ESC+91+X 3:ALT+SPACE.(2)
-
-	escapeTimeoutFunction := func(initialTimeout time.Time) {
-		time.Sleep(time.Millisecond * 40)
-		escapeTimeoutMutex.Lock()
-		defer escapeTimeoutMutex.Unlock()
-
-		if ((escapeTimeoutStartTime).Equal(initialTimeout)) {
-			loopMode = 0
-			bytes_left_to_read = 0
-			n_bytes_buffer = n_bytes_buffer[:0]
-			state = 0
-			events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "ESC"}}
-			escapeTimeoutStartTime = time.Time{}
-		}
-	}
-
-	requestReadN := func(nBytes int, newState int) {
-		loopMode = 1
-		n_bytes_buffer = n_bytes_buffer[:0]
-		bytes_left_to_read = nBytes
-		state = newState
-	}
-
-	resetLoop := func() {
-		state = 0
-		loopMode = 0
-	}
 	
-	for {
-		n, err := os.Stdin.Read(readBuf)
+	hasStarted <- 1
+	
+	readBuf := make([]byte, 128) // cache line size on macbook m4 air
+	validBytesCount := 0 // firstN
+	consumedCount := 0
 
-		if err != nil {
-			panic(err)
+	getNextNBytes := func(requestBytesCount int) ([]byte, error) {
+		if (requestBytesCount > 128) {
+			return nil, errors.New("For performance reasons we are limiting nBytes reads to the size of the readBuf buffer")
 		}
 
-		if n == 0 {
+		if (requestBytesCount <= (validBytesCount - consumedCount)) {
+			out_slice := readBuf[consumedCount : consumedCount + requestBytesCount]
+			consumedCount += requestBytesCount
+			return out_slice, nil
+		}
+
+		newValidBuf := readBuf[consumedCount:validBytesCount]
+
+		copy(readBuf, newValidBuf)
+
+		validBytesCount = len(newValidBuf)
+		consumedCount = 0
+
+		for {
+			addedBytes, err := os.Stdin.Read(readBuf[validBytesCount:]); if err != nil {panic(err)}
+			validBytesCount += addedBytes
+
+			if (validBytesCount >= requestBytesCount) {
+				out_slice := readBuf[consumedCount : consumedCount + requestBytesCount]
+				consumedCount += requestBytesCount
+				return out_slice, nil
+			}
+		}
+	}
+
+	nextNBytesInBuffer := func(requestBytesCount int) bool {
+		return requestBytesCount <= (validBytesCount - consumedCount)
+	}
+
+	for {
+		sequence, err := getNextNBytes(1); if err != nil {panic(err)}
+		first_byte := sequence[0]
+
+		if first_byte >= 32 && first_byte <= 126 {
+			events <- shared.Event{
+				Type: shared.ENUM_EVENT_KEY,
+				KeyData: &shared.KeyEventData{
+					Key: string(first_byte),
+				},
+			}
+			continue
+		}
+
+		if first_byte == 127 {
+			events <- shared.Event{
+				Type: shared.ENUM_EVENT_KEY,
+				KeyData: &shared.KeyEventData{
+					Key: "BACKSPACE",
+				},
+			}
 			continue
 		}
 
 		{
-			escapeTimeoutMutex.Lock()
+			event, matches := MatchesCTRL_X(first_byte)
 
-			escapeTimeoutStartTime = time.Time{}
-
-			escapeTimeoutMutex.Unlock()
+			if matches {
+				events <- event
+				continue
+			}
 		}
 
-		current_buffer := readBuf[0:n]
+		if first_byte == 27 {
+			timeout_time := time.Time{}
+			timeout_mutex := sync.Mutex{}
+			starting_timeout := !nextNBytesInBuffer(1)
 
-		fmt.Println(current_buffer, loopMode, state)
-
-		for i := 0; i < n; i++ {
-			b := current_buffer[i]
-
-			if loopMode == 0 {
-				if b >= 32 && b <= 126 {
-					fmt.Println("Basic", b)
-					events <- shared.Event{
-						Type: shared.ENUM_EVENT_KEY,
-						KeyData: &shared.KeyEventData{
-							Key: string(b),
-						},
-					}
-					continue
-				}
-
-				CTRL_X_Event, is_CTRL_X := MatchesCTRL_X(b)
-				if is_CTRL_X {
-					fmt.Println("CTRL Basic", CTRL_X_Event.KeyData.Key)
-					events <- CTRL_X_Event
-					continue
-				}
-
-				if b == 27 {
-					if len(current_buffer) == 1 {
+			if starting_timeout {
+				timeout_time = time.Now()
+				go func() {
+					time.Sleep(time.Millisecond * 40)
+					timeout_mutex.Lock()
+					if !timeout_time.Equal(time.Time{}) {
+						timeout_time = time.Time{}
 						events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "ESC"}}
-						continue
 					}
-					
-					if i == len(current_buffer) - 1 {
-						escapeTimeoutStartTime = time.Now()
-						go escapeTimeoutFunction(escapeTimeoutStartTime)
-					}
-					
-					requestReadN(1, 1)
+					timeout_mutex.Unlock()
+				}()
+			}
+
+			sequence, err = getNextNBytes(1); if err != nil {panic(err)}
+
+			if starting_timeout {
+				timeout_mutex.Lock()
+				if timeout_time.Equal(time.Time{}) {
+					consumedCount -= 1
 					continue
 				}
+				timeout_mutex.Unlock()
+			}
 
-				if b == 194 {
-					requestReadN(1, 3)
-					continue
+			if sequence[0] == 98 {
+				events <- shared.Event{
+					Type: shared.ENUM_EVENT_KEY,
+					KeyData: &shared.KeyEventData{
+						Key: "ALT+ARROW_LEFT",
+					},
 				}
 				continue
 			}
 
-			if loopMode == 1 {
-				if bytes_left_to_read != 0 {
-					n_bytes_buffer = append(n_bytes_buffer, b)
-					bytes_left_to_read -= 1
+			if sequence[0] == 102 {
+				events <- shared.Event{
+					Type: shared.ENUM_EVENT_KEY,
+					KeyData: &shared.KeyEventData{
+						Key: "ALT+ARROW_RIGHT",
+					},
+				}
+				continue
+			}
+
+			if sequence[0] == 91 {
+				sequence, err = getNextNBytes(1); if err != nil {panic(err)}
+				
+				if sequence[0] == 65 {
+					events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "ARROW_UP"}}
+					continue
 				}
 
-				// ^ always passes through
+				if sequence[0] == 66 {
+					events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "ARROW_DOWN"}}
+					continue
+				}
 
-				if bytes_left_to_read == 0 {
-					if state == 1 {
-						first_byte := n_bytes_buffer[0]
+				if sequence[0] == 67 {
+					events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "ARROW_RIGHT"}}
+					continue
+				}
 
-						if first_byte == 91 {
-							requestReadN(1, 2)
+				if sequence[0] == 68 {
+					events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "ARROW_LEFT"}}
+					continue
+				}
+
+				if sequence[0] == 49 {
+					sequence, err = getNextNBytes(3); if err != nil {panic(err)}
+
+					if sequence[0] == 59 {
+						if sequence[1] == 51 {
+							if sequence[2] == 65 {
+								events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "ALT+ARROW_UP"}}
+							}
+
+							if sequence[2] == 66 {
+								events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "ALT+ARROW_DOWN"}}
+							}
+
+							continue
+						}
+						
+						if sequence[1] == 50 {
+							var KeyString string
+
+							if sequence[2] == 68 {
+								KeyString = "SHIFT+ARROW_LEFT"
+							}
+
+							if sequence[2] == 67 {
+								KeyString = "SHIFT+ARROW_RIGHT"
+							}
+
+							if sequence[2] == 65 {
+								KeyString = "SHIFT+ARROW_UP"
+							}
+
+							if sequence[2] == 66 {
+								KeyString = "SHIFT+ARROW_DOWN"
+							}
+
+							events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: KeyString}}
+							continue
+						}
+					}
+
+					if sequence[0] == 48 {
+						getNextNBytes(2) // doing this as sequence contains [53 117] we don't check
+
+						if sequence[2] == 59 {
+							if sequence[1] == 57 {
+								events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "CTRL+M"}}
+								continue
+							}
+
+							if sequence[1] == 53 {
+								events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "CTRL+I"}}
+								continue
+							}
+
 							continue
 						}
 
-						if first_byte == 102 {
-							events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "ALT+ARROW_RIGHT"}}
-							resetLoop()
-							continue
-						}
-						if first_byte == 98 {
-							events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "ALT+ARROW_LEFT"}}
-							resetLoop()
-							continue
-						}
-
-						if first_byte == 127 {
-							events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "ALT+DELETE"}}
-							resetLoop()
-							continue
-						}
-
-						// if unprocessed then package escape and parse the rest
-						events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "ESC"}}
-						resetLoop()
-						i -= 1
-						escapeTimeoutStartTime = time.Time{}
 						continue
 					}
 
-					if state == 2 {
-						first_byte := n_bytes_buffer[0]
-
-						if first_byte == 65 {
-							events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "ARROW_UP"}}
-							resetLoop()
-							continue
-						}
-						if first_byte == 66 {
-							events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "ARROW_DOWN"}}
-							resetLoop()
-							continue
-						}
-						if first_byte == 67 {
-							events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "ARROW_RIGHT"}}
-							resetLoop()
-							continue
-						}
-						if first_byte == 68 {
-							events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "ARROW_LEFT"}}
-							resetLoop()
-							continue
-						}
-
-						cleanup()
-						panic("Unhandled ESC+91+X=" + strconv.FormatInt(int64(n_bytes_buffer[0]), 10))
-					}
-
-					if state == 3 {
-						if n_bytes_buffer[0] == 160 {
-							events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "ALT+SPACE"}}
-							resetLoop()
-							continue
-						}
-
-						cleanup()
-						panic("Unhandled 194+X=" + strconv.FormatInt(int64(n_bytes_buffer[0]), 10))
-					}
+					continue
 				}
 
+				if sequence[0] == 60 {
+					Cb := 0
+					Cx := 0
+					Cy := 0
+
+					for {
+						sequence, err = getNextNBytes(1); if err != nil {panic(err)}
+
+						if sequence[0] == ';' {
+							break
+						}
+
+						Cb = (Cb * 10) + int(sequence[0]) - 48
+					}
+
+					for {
+						sequence, err = getNextNBytes(1); if err != nil {panic(err)}
+
+						if sequence[0] == ';' {
+							break
+						}
+
+						Cx = (Cx * 10) + int(sequence[0]) - 48
+					}
+
+					for {
+						sequence, err = getNextNBytes(1); if err != nil {panic(err)}
+
+						if sequence[0] == 'M' || sequence[0] == 'm' {
+							break
+						}
+
+						Cy = (Cy * 10) + int(sequence[0]) - 48
+					}
+
+					base := Cb & 3
+
+					shift := Cb&4 != 0
+					alt := Cb&8 != 0
+					ctrl := Cb&16 != 0
+
+					motion := Cb&32 != 0
+					wheel := Cb&64 != 0
+
+					modifier := ""
+					if shift {
+						modifier += "shift"
+					}
+					if alt {
+						if modifier != "" {
+							modifier += " "
+						}
+						modifier += "alt"
+					}
+					if ctrl {
+						if modifier != "" {
+							modifier += " "
+						}
+						modifier += "ctrl"
+					}
+
+					mouseData := shared.MouseEventData{
+						Modifier: modifier,
+						X:        Cx,
+						Y:        Cy,
+					}
+
+					if wheel {
+						switch base {
+							case 0:
+								mouseData.Scrolling = 1 // up
+							case 1:
+								mouseData.Scrolling = 2 // down
+							case 2:
+								mouseData.Scrolling = 3 // left
+							case 3:
+								mouseData.Scrolling = 4 // right
+						}
+					} else {
+						if motion {
+							if base == 3 {
+								mouseData.Hovering = true
+							} else {
+								mouseData.Dragging = true
+								mouseData.ClickType = base + 1
+							}
+						} else {
+							if base <= 2 {
+								mouseData.ClickType = base + 1
+							}
+						}
+
+						if sequence[0] == 'm' {
+							mouseData.Released = true
+							if base <= 2 {
+								mouseData.ClickType = base + 1
+							}
+						}
+					}
+
+					event := shared.Event{
+						Type:      shared.ENUM_EVENT_MOUSE,
+						MouseData: &mouseData,
+					}
+
+					events <- event
+
+					continue
+				}
+
+				if sequence[0] == 50 {
+					temp_sequence, err := getNextNBytes(1); if err != nil {panic(err)}
+
+					if temp_sequence[0] == 126 {
+						events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "INSERT"}}
+						continue
+					}
+
+					getNextNBytes(2)
+
+					pasteContent := make([]byte, 0, 4096)
+					pattern := []byte{27, 91, 50, 48, 49, 126}
+					patternMatchCount := 0
+
+					for {
+						sequence, err = getNextNBytes(1); if err != nil {panic(err)}
+
+						if patternMatchCount == 0 && sequence[0] == 27 {
+							patternMatchCount += 1
+							continue
+						}
+
+						if patternMatchCount == 0 {
+							pasteContent = append(pasteContent, sequence[0])
+							continue
+						}
+						
+						if patternMatchCount != 0 {
+							if pattern[patternMatchCount] != sequence[0] {
+								pasteContent = append(pasteContent, pattern[:patternMatchCount]...)
+							} else {
+								patternMatchCount += 1
+							}
+
+							if patternMatchCount == 6 {
+								events <- shared.Event{
+									Type: shared.ENUM_EVENT_KEY,
+									KeyData: &shared.KeyEventData{
+										Key: "PASTE",
+										Data: pasteContent,
+									},
+								}
+
+								break
+							}
+
+							continue
+						}
+					}
+
+					continue
+				}
+
+				if sequence[0] == 53 {
+					getNextNBytes(1)
+					events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "PAGE_UP"}}
+					continue
+				}
+
+				if sequence[0] == 54 {
+					getNextNBytes(1)
+					events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "PAGE_DOWN"}}
+					continue
+				}
+
+				if sequence[0] == 72 {
+					events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "HOME"}}
+					continue
+				}
+
+				if sequence[0] == 70 {
+					events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "END"}}
+					continue
+				}
+
+				if sequence[0] == 51 {
+					getNextNBytes(1)
+					events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: "DELETE"}}
+					continue
+				}
+				
 				continue
 			}
+
+			continue
+		}
+
+		if sequence[0] == 194 {
+			sequence, err = getNextNBytes(1); if err != nil {panic(err)}
+
+			key := ""
+
+			if sequence[0] == 161 {
+				key = "ALT+1"
+			}
+
+			if sequence[0] == 163 {
+				key = "ALT+3"
+			}
+
+			if sequence[0] == 167  {
+				key = "ALT+5"
+			}
+
+			if sequence[0] == 182 {
+				key = "ALT+7"
+			}
+
+			if sequence[0] == 176 {
+				key = "ALT+0"
+			}
+
+			events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: key}}
+			continue
+		}
+
+		if sequence[0] == 226 {
+			sequence, err = getNextNBytes(2); if err != nil {panic(err)}
+
+			key := ""
+
+			if sequence[0] == 132 && sequence[1] == 162 {
+				key = "ALT+2"
+			}
+
+			if sequence[0] == 130 && sequence[1] == 185 {
+				key = "ALT+4"
+			}
+
+			if sequence[0] == 128 && sequence[1] == 162 {
+				key = "ALT+8"
+			}
+
+			events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: key}}
+			continue
+		}
+
+		if sequence[0] == 204 {
+			sequence, err = getNextNBytes(1); if err != nil {panic(err)}
+
+			key := ""
+
+			if sequence[0] == 144 {
+				key = "ALT+9"
+			}
+
+			events <- shared.Event{Type: shared.ENUM_EVENT_KEY, KeyData: &shared.KeyEventData{Key: key}}
+			continue
 		}
 	}
 }
@@ -249,7 +526,7 @@ func MatchesCTRL_X(b byte) (shared.Event, bool) {
 		case 8:
 			key = "CTRL+DELETE" // could be CTRL+H
 		case 9:
-			key = "CTRL+I"
+			key = "TAB" // could be CTRL+I
 		case 10:
 			key = "CTRL+J"
 		case 11:
@@ -257,7 +534,7 @@ func MatchesCTRL_X(b byte) (shared.Event, bool) {
 		case 12:
 			key = "CTRL+L"
 		case 13:
-			key = "CTRL+M"
+			key = "CTRL+M" // could also be full size keyboard numpad side enter
 		case 14:
 			key = "CTRL+N"
 		case 15:
@@ -287,16 +564,6 @@ func MatchesCTRL_X(b byte) (shared.Event, bool) {
 		case 31:
 			key = "CTRL+?"
 	}
-
-	out.KeyData = &shared.KeyEventData{Key: key}
-
-	return out, len(key) != 0
-}
-
-func MatchesEscapedCTRL_X() (shared.Event, bool) {
-	// to handle M, I for ghostty
-	out := shared.Event{Type: shared.ENUM_EVENT_KEY}
-	var key string
 
 	out.KeyData = &shared.KeyEventData{Key: key}
 

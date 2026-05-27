@@ -1,0 +1,14 @@
+Alt Arrow Horizontal  (0) [27 102]
+Arrow        (3) [27 91 67] 65 up 66 down 67 right 68 left
+Alt Arrow V  (6) [27 91 49 59 51 65]
+
+Shift + Arrow
+Left, Right = [27 91 49 59 50 68/67] 
+Up, Down    = [27 91 49 59 50 65/66]
+
+Keyboard     (8) [27 91 49 48 53 59 53 117]
+Mouse       (12) [27 91 60 51 53 59 49 52 48 59 56 77]
+Paste        (6) [27 91 50 48 48 126]
+Add ALT+NUMBERS
+
+Handle pageup, insert, home, del, end

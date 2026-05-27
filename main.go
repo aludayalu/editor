@@ -10,6 +10,7 @@ import (
 	"golang.org/x/term"
 )
 
+
 func main() {
 	var events chan shared.Event = make(chan shared.Event)
 
