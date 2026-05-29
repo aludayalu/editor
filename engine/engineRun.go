@@ -17,10 +17,16 @@ func SetCursor(row int, col int) {
 }
 
 func Run(events chan shared.Event) {
+	go Render() // need to add sync between Render and process events
+
+	ProcessEvents(events)
+}
+
+func Render() {
 	arena_group := arena.NewArenaGroup(allocationBufferInitialSize)
 	_ = arena_group // to remove
 
 	SetCursor(1, 1)
 
-	ProcessEvents(events)
+	fmt.Println(elements.Text{Text: "😭🙏🏼"}.Render(shared.Render_Info{Arena_Group: arena_group}).Buffer)
 }

@@ -4,11 +4,6 @@ import (
 	"ltz/arena"
 )
 
-type Coordinate struct {
-	Column int
-	Row int
-}
-
 type Renderable interface {
 	Render(render_info Render_Info)RenderResult
 }
@@ -30,6 +25,6 @@ type RenderingDimensions struct {
 }
 
 type Cell struct {
-	Data []byte
-	DataVisualWidth uint8 // 0, 1, 2
+	Data []byte // contains ZW and Data
+	DataVisualWidth uint64 // 1 or 2
 }

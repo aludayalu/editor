@@ -321,7 +321,7 @@ func queryCol() (uint64, error) {
 
 // Grapheme represents a single visual unit
 type Grapheme struct {
-	Data  string
+	Data  []byte
 	Width uint64
 }
 
@@ -370,7 +370,7 @@ func Graphemes(s string) []Grapheme {
 
 		cluster := runes[start:i]
 		result = append(result, Grapheme{
-			Data:  string(cluster),
+			Data:  []byte(string(cluster)),
 			Width: graphemeWidth(cluster),
 		})
 	}
